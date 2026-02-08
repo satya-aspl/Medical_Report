@@ -1,0 +1,26 @@
+Extract lab results from this document.
+
+CRITICAL - Date:
+- Use ONLY the report date: the date when the lab report was issued / sample collected, as printed on the report (e.g. "Report Date", "Collection Date", , "Abnahmedatum", "Date of Report").
+- Do NOT use the patient's date of birth (DOB), or any other date. Only the report/specimen date.
+- Output the date in YYYY-MM-DD format.
+
+For each parameter:
+- "name_original": the exact parameter name as written on the report (e.g. "Hb", "FBS").
+- "name": the same parameter in standard English (e.g. "Hemoglobin", "Fasting Blood Glucose").
+- value, unit, ref_min, ref_max as in the report.
+
+Return only valid JSON with this structure:
+{
+  "date": "YYYY-MM-DD",
+  "results": [
+    {
+      "name_original": "str (as on report)",
+      "name": "str (English)",
+      "value": float,
+      "unit": "str",
+      "ref_min": float or null,
+      "ref_max": float or null
+    }
+  ]
+}
