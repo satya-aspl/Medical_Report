@@ -120,3 +120,19 @@ Open [http://127.0.0.1:5000](http://127.0.0.1:5000) in your browser.
 - **Uploads** are saved in the `uploads/` folder.
 - **Logs** (e.g. processing discrepancies) go to `logs/processing.log`.
 - Each user runs the app on their own machine. There is no central server or cloud hosting.
+
+---
+
+## Publishing to GitHub (for distribution)
+
+1. Create a new repository on [github.com](https://github.com/new). Leave it empty (no README, no .gitignore).
+
+2. Add the remote and push:
+
+   ```bash
+   git remote add origin https://github.com/YOUR_USERNAME/Medical_Report.git
+   git branch -M main
+   git push -u origin main
+   ```
+
+3. Share the repo URL with friends. They can clone and follow this setup guide.
