@@ -23,7 +23,7 @@ Or use the installer from [python.org](https://www.python.org/downloads/).
 
 ```bash
 cd ~/Downloads  # or your preferred folder
-git clone https://github.com/YOUR_USERNAME/Medical_Report.git
+git clone https://github.com/satya-aspl/Medical_Report.git
 cd Medical_Report
 ```
 
@@ -75,7 +75,7 @@ Using Git:
 
 ```cmd
 cd %USERPROFILE%\Downloads
-git clone https://github.com/YOUR_USERNAME/Medical_Report.git
+git clone https://github.com/satya-aspl/Medical_Report.git
 cd Medical_Report
 ```
 
@@ -130,7 +130,7 @@ Open [http://127.0.0.1:5000](http://127.0.0.1:5000) in your browser.
 2. Add the remote and push:
 
    ```bash
-   git remote add origin https://github.com/YOUR_USERNAME/Medical_Report.git
+   git remote add origin https://github.com/satya-aspl/Medical_Report.git
    git branch -M main
    git push -u origin main
    ```
