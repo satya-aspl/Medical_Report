@@ -1,5 +1,22 @@
+# Secrets and local env
 .env
-uploads/
-*.db
-logs/
+.env.*
+
+# Local virtual environments
 .venv/
+venv/
+
+# Python cache/bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local app data
+uploads/
+logs/
+*.db
+*.sqlite3
+
+# OS/editor noise
+.DS_Store
+.vscode/

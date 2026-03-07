@@ -1,7 +1,12 @@
 flask
+flask-cors
 pandas
 plotly
 pydantic
 python-dotenv
 openai
 google-genai
+pyjwt
+flask-cors
+python-jose[cryptography]
+PyJWT

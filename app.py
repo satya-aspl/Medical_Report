@@ -3,19 +3,40 @@ import sqlite3
 import pandas as pd
 import plotly.graph_objects as go
 import json
-from flask import Flask, render_template, request, redirect, url_for
-# from google import genai
+from flask import Flask, render_template, request, redirect, url_for, jsonify, session, flash
+from flask_cors import CORS
 from openai import OpenAI
 from pydantic import BaseModel
 import dotenv
 import logging
+from functools import wraps
+from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime
+
 dotenv.load_dotenv()
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['LOG_FILE'] = os.path.join(os.path.dirname(__file__), "logs", "processing.log")
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(os.path.dirname(app.config['LOG_FILE']), exist_ok=True)
+
+CORS(app, resources={r"/*": {"origins": ["http://localhost:3000", "http://localhost:5000", "http://localhost:5173"]}})
+
+def get_current_user():
+    """Get the current user from session."""
+    return session.get('user_id')
+
+def require_login(f):
+    """Decorator to require user login."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not get_current_user():
+            flash('Please log in to continue', 'warning')
+            return redirect(url_for('login_page'))
+        return f(*args, **kwargs)
+    return decorated_function
 
 _processing_log = logging.getLogger("report_processing")
 _processing_log.setLevel(logging.INFO)
@@ -116,65 +137,90 @@ def extract_lab_report_openai(path: str, model_name: str = "gpt-4o") -> LabRepor
 def init_db():
     conn = sqlite3.connect('health_data.db')
     conn.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
         CREATE TABLE IF NOT EXISTS parameters (
-            canonical_name TEXT PRIMARY KEY,
-            default_unit TEXT NOT NULL
+            user_id TEXT NOT NULL,
+            canonical_name TEXT NOT NULL,
+            default_unit TEXT NOT NULL,
+            PRIMARY KEY (user_id, canonical_name),
+            FOREIGN KEY (user_id) REFERENCES users(id)
         );
         CREATE TABLE IF NOT EXISTS parameter_aliases (
-            alias TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            alias TEXT NOT NULL,
             canonical_name TEXT NOT NULL,
-            FOREIGN KEY (canonical_name) REFERENCES parameters(canonical_name)
+            PRIMARY KEY (user_id, alias),
+            FOREIGN KEY (user_id, canonical_name) REFERENCES parameters(user_id, canonical_name)
         );
         CREATE TABLE IF NOT EXISTS labs (
+            user_id TEXT NOT NULL,
             date TEXT,
             name_original TEXT,
             name TEXT NOT NULL,
             value REAL,
             unit TEXT,
             ref_min REAL,
-            ref_max REAL
+            ref_max REAL,
+            FOREIGN KEY (user_id, name) REFERENCES parameters(user_id, canonical_name)
+        );
+        CREATE TABLE IF NOT EXISTS assessment_cache (
+            user_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            latest_value REAL NOT NULL,
+            latest_date TEXT,
+            latest_ref_min REAL,
+            latest_ref_max REAL,
+            assessment_json TEXT NOT NULL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, name),
+            FOREIGN KEY (user_id, name) REFERENCES parameters(user_id, canonical_name)
         );
     """)
     conn.close()
 
 
-def _resolve_canonical_name(conn: sqlite3.Connection, name_original: str, name_english: str) -> str:
+def _resolve_canonical_name(conn: sqlite3.Connection, user_id: str, name_original: str, name_english: str) -> str:
     """If this parameter exists in DB (by canonical or alias), return canonical name; else return name_english."""
     for candidate in (name_english.strip(), name_original.strip()):
         if not candidate:
             continue
         row = conn.execute(
-            "SELECT canonical_name FROM parameters WHERE canonical_name = ?", (candidate,)
+            "SELECT canonical_name FROM parameters WHERE user_id = ? AND canonical_name = ?", (user_id, candidate,)
         ).fetchone()
         if row:
             return row[0]
         row = conn.execute(
-            "SELECT canonical_name FROM parameter_aliases WHERE LOWER(alias) = LOWER(?)", (candidate,)
+            "SELECT canonical_name FROM parameter_aliases WHERE user_id = ? AND LOWER(alias) = LOWER(?)", (user_id, candidate,)
         ).fetchone()
         if row:
             return row[0]
     return name_english.strip()
 
 
-def _ensure_parameter(conn: sqlite3.Connection, canonical_name: str, default_unit: str, aliases: list[str]):
-    """Ensure parameter and aliases exist."""
+def _ensure_parameter(conn: sqlite3.Connection, user_id: str, canonical_name: str, default_unit: str, aliases: list[str]):
+    """Ensure parameter and aliases exist for user."""
     conn.execute(
-        "INSERT OR IGNORE INTO parameters (canonical_name, default_unit) VALUES (?, ?)",
-        (canonical_name, default_unit),
+        "INSERT OR IGNORE INTO parameters (user_id, canonical_name, default_unit) VALUES (?, ?, ?)",
+        (user_id, canonical_name, default_unit),
     )
     for a in aliases:
         if a and a.strip():
             conn.execute(
-                "INSERT OR IGNORE INTO parameter_aliases (alias, canonical_name) VALUES (?, ?)",
-                (a.strip(), canonical_name),
+                "INSERT OR IGNORE INTO parameter_aliases (user_id, alias, canonical_name) VALUES (?, ?, ?)",
+                (user_id, a.strip(), canonical_name),
             )
 
 
-def _get_existing_ref(conn: sqlite3.Connection, canonical_name: str) -> tuple[float | None, float | None]:
-    """Get latest ref_min, ref_max for this parameter from labs."""
+def _get_existing_ref(conn: sqlite3.Connection, user_id: str, canonical_name: str) -> tuple[float | None, float | None]:
+    """Get latest ref_min, ref_max for this parameter from user's labs."""
     row = conn.execute(
-        "SELECT ref_min, ref_max FROM labs WHERE name = ? ORDER BY date DESC LIMIT 1",
-        (canonical_name,),
+        "SELECT ref_min, ref_max FROM labs WHERE user_id = ? AND name = ? ORDER BY date DESC LIMIT 1",
+        (user_id, canonical_name,),
     ).fetchone()
     if row:
         return (row[0], row[1])
@@ -219,19 +265,214 @@ def _llm_convert_units(
         return value, ref_min, ref_max
 
 
-def process_and_store_report(conn: sqlite3.Connection, data: LabReport) -> None:
+def _classify_status(value: float, ref_min: float | None, ref_max: float | None) -> str:
+    """Classify latest lab value against reference range."""
+    if ref_min is None and ref_max is None:
+        return "unknown"
+
+    # Borderline threshold: within 10% of the reference interval near either bound.
+    if ref_min is not None and ref_max is not None and ref_max > ref_min:
+        margin = (ref_max - ref_min) * 0.10
+        if value < ref_min or value > ref_max:
+            return "outside"
+        if value <= (ref_min + margin) or value >= (ref_max - margin):
+            return "borderline"
+        return "normal"
+
+    if ref_min is not None:
+        if value < ref_min:
+            return "outside"
+        if value <= ref_min * 1.10:
+            return "borderline"
+        return "normal"
+
+    # ref_max only
+    if value > ref_max:
+        return "outside"
+    if value >= ref_max * 0.90:
+        return "borderline"
+    return "normal"
+
+
+def _fallback_assessment(name: str, value: float, unit: str, ref_min: float | None, ref_max: float | None, status: str) -> dict:
+    """Fallback text when OpenAI is unavailable or fails."""
+    summary = (
+        f"Latest {name}: {value} {unit}. "
+        f"Reference range: {ref_min if ref_min is not None else '-'} to {ref_max if ref_max is not None else '-'} ({status})."
+    )
+    if status in {"outside", "borderline"}:
+        tips = [
+            "Prioritize whole foods: vegetables, lean protein, and fiber; reduce added sugar and ultra-processed snacks.",
+            "Do regular activity: 30 minutes brisk walking 5 days/week plus 2 days of light strength training.",
+        ]
+    else:
+        tips = [
+            "Maintain your current routine with balanced meals and hydration.",
+            "Keep a consistent weekly exercise schedule and recheck labs as advised.",
+        ]
+    return {"summary": summary, "tips": tips}
+
+
+def _get_deeper_assessment(name: str, unit: str, trend_rows: list[dict]) -> dict:
+    """Generate deeper lab assessment using OpenAI based on trend and reference range."""
+    latest = trend_rows[-1]
+    value = float(latest["value"])
+    ref_min = latest.get("ref_min")
+    ref_max = latest.get("ref_max")
+    status = _classify_status(value, ref_min, ref_max)
+
+    if not openai_client:
+        return _fallback_assessment(name, value, unit, ref_min, ref_max, status)
+
+    prompt = (
+        "You are a clinical-lab explainer for patients. Provide concise, non-diagnostic education. "
+        "Do not prescribe medication. If status is outside or borderline, include exactly 2 practical lifestyle tips "
+        "(food/exercise) and keep each tip to one line."
+    )
+    user_data = {
+        "investigation": name,
+        "unit": unit,
+        "latest_value": value,
+        "latest_ref_min": ref_min,
+        "latest_ref_max": ref_max,
+        "status": status,
+        "trend": trend_rows,
+    }
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": prompt},
+                {
+                    "role": "user",
+                    "content": (
+                        "Analyze this lab trend data and return JSON only with keys: "
+                        "summary (string, max 2 sentences) and tips (array of exactly 2 strings). "
+                        "If status is normal, tips should be maintenance tips. Data: " + json.dumps(user_data)
+                    ),
+                },
+            ],
+            response_format={"type": "json_object"},
+        )
+        raw = response.choices[0].message.content
+        out = json.loads(_strip_json_markdown(raw))
+        summary = str(out.get("summary", "")).strip()
+        tips = out.get("tips", [])
+        if not isinstance(tips, list):
+            tips = []
+        tips = [str(t).strip() for t in tips if str(t).strip()]
+        if len(tips) < 2:
+            fallback = _fallback_assessment(name, value, unit, ref_min, ref_max, status)
+            while len(tips) < 2:
+                tips.append(fallback["tips"][len(tips)])
+        return {
+            "summary": summary or _fallback_assessment(name, value, unit, ref_min, ref_max, status)["summary"],
+            "tips": tips[:2],
+        }
+    except Exception as e:
+        _processing_log.warning("Deeper assessment failed: %s", e)
+        return _fallback_assessment(name, value, unit, ref_min, ref_max, status)
+
+
+def _float_equal(a: float | None, b: float | None, tol: float = 1e-9) -> bool:
+    """Compare floats safely, handling None values."""
+    if a is None and b is None:
+        return True
+    if a is None or b is None:
+        return False
+    return abs(float(a) - float(b)) <= tol
+
+
+def _ensure_assessment_cache_table(conn: sqlite3.Connection) -> None:
+    """Ensure assessment cache table exists for older DB files."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS assessment_cache (
+            user_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            latest_value REAL NOT NULL,
+            latest_date TEXT,
+            latest_ref_min REAL,
+            latest_ref_max REAL,
+            assessment_json TEXT NOT NULL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, name),
+            FOREIGN KEY (user_id, name) REFERENCES parameters(user_id, canonical_name)
+        )
+        """
+    )
+
+
+def _load_cached_assessment(conn: sqlite3.Connection, user_id: str, name: str, latest: dict) -> dict | None:
+    """Return cached assessment when latest value is unchanged for investigation."""
+    _ensure_assessment_cache_table(conn)
+    row = conn.execute(
+        """
+        SELECT latest_value, latest_date, latest_ref_min, latest_ref_max, assessment_json
+        FROM assessment_cache
+        WHERE user_id = ? AND name = ?
+        """,
+        (user_id, name,),
+    ).fetchone()
+    if not row:
+        return None
+
+    cached_value, _, _, _, cached_json = row
+    latest_value = float(latest["value"])
+    if not _float_equal(cached_value, latest_value):
+        return None
+
+    try:
+        parsed = json.loads(cached_json)
+        if isinstance(parsed, dict) and "summary" in parsed and "tips" in parsed:
+            return parsed
+    except Exception:
+        return None
+    return None
+
+
+def _save_cached_assessment(conn: sqlite3.Connection, user_id: str, name: str, latest: dict, assessment: dict) -> None:
+    """Upsert latest assessment cache for an investigation."""
+    _ensure_assessment_cache_table(conn)
+    conn.execute(
+        """
+        INSERT INTO assessment_cache
+            (user_id, name, latest_value, latest_date, latest_ref_min, latest_ref_max, assessment_json, updated_at)
+        VALUES
+            (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id, name) DO UPDATE SET
+            latest_value = excluded.latest_value,
+            latest_date = excluded.latest_date,
+            latest_ref_min = excluded.latest_ref_min,
+            latest_ref_max = excluded.latest_ref_max,
+            assessment_json = excluded.assessment_json,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            user_id,
+            name,
+            float(latest["value"]),
+            latest.get("date"),
+            latest.get("ref_min"),
+            latest.get("ref_max"),
+            json.dumps(assessment),
+        ),
+    )
+
+
+def process_and_store_report(conn: sqlite3.Connection, user_id: str, data: LabReport) -> None:
     """Resolve canonical names, convert units (LLM when name+unit exist in DB), apply ref sanity check, insert."""
     for res in data.results:
-        canonical = _resolve_canonical_name(conn, res.name_original, res.name)
+        canonical = _resolve_canonical_name(conn, user_id, res.name_original, res.name)
         aliases = list(dict.fromkeys([x for x in (res.name.strip(), res.name_original.strip()) if x]))
         default_unit = res.unit
         existing = conn.execute(
-            "SELECT default_unit FROM parameters WHERE canonical_name = ?", (canonical,)
+            "SELECT default_unit FROM parameters WHERE user_id = ? AND canonical_name = ?", (user_id, canonical,)
         ).fetchone()
         if existing:
             default_unit = existing[0]
         else:
-            _ensure_parameter(conn, canonical, res.unit, aliases)
+            _ensure_parameter(conn, user_id, canonical, res.unit, aliases)
 
         from_u = res.unit.strip().lower()
         to_u = default_unit.strip().lower()
@@ -242,12 +483,12 @@ def process_and_store_report(conn: sqlite3.Connection, data: LabReport) -> None:
         else:
             value_stored, ref_min_stored, ref_max_stored = res.value, res.ref_min, res.ref_max
 
-        ref_min_use, ref_max_use = _get_existing_ref(conn, canonical)
+        ref_min_use, ref_max_use = _get_existing_ref(conn, user_id, canonical)
         if ref_min_use is not None or ref_max_use is not None:
             if (ref_min_use != ref_min_stored) or (ref_max_use != ref_max_stored):
                 _processing_log.info(
-                    "Ref discrepancy | param=%s | report_date=%s | report ref=%s–%s | stored ref=%s–%s",
-                    canonical, data.date, ref_min_stored, ref_max_stored, ref_min_use, ref_max_use,
+                    "Ref discrepancy | user=%s | param=%s | report_date=%s | report ref=%s–%s | stored ref=%s–%s",
+                    user_id, canonical, data.date, ref_min_stored, ref_max_stored, ref_min_use, ref_max_use,
                 )
             ref_min_use = ref_min_use if ref_min_use is not None else ref_min_stored
             ref_max_use = ref_max_use if ref_max_use is not None else ref_max_stored
@@ -255,80 +496,245 @@ def process_and_store_report(conn: sqlite3.Connection, data: LabReport) -> None:
             ref_min_use, ref_max_use = ref_min_stored, ref_max_stored
 
         conn.execute(
-            "INSERT INTO labs (date, name_original, name, value, unit, ref_min, ref_max) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (data.date, res.name_original, canonical, value_stored, default_unit, ref_min_use, ref_max_use),
+            "INSERT INTO labs (user_id, date, name_original, name, value, unit, ref_min, ref_max) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (user_id, data.date, res.name_original, canonical, value_stored, default_unit, ref_min_use, ref_max_use),
         )
 
 
 # --- ROUTES ---
+
 @app.route('/')
 def index():
-    conn = sqlite3.connect('health_data.db')
-    # Get unique investigations for the dropdown
-    names = pd.read_sql("SELECT DISTINCT name FROM labs", conn)['name'].tolist()
-    
-    selected_name = request.args.get('investigation')
-    graph_json = None
-    processed_date = request.args.get('processed')
-    processed_results = None
-    if processed_date:
-        df = pd.read_sql(
-            "SELECT name, value, unit, ref_min, ref_max FROM labs WHERE date = ? ORDER BY name",
-            conn,
-            params=(processed_date,),
-        )
-        processed_results = df.to_dict("records") if not df.empty else None
+    """Home page - redirect to dashboard if logged in, else to login"""
+    if get_current_user():
+        return redirect(url_for('dashboard'))
+    return redirect(url_for('login_page'))
 
-    if selected_name:
-        df = pd.read_sql(f"SELECT * FROM labs WHERE name = '{selected_name}' ORDER BY date", conn)
-        if not df.empty:
-            fig = go.Figure()
-            # 1. Add Shaded Reference Range (from latest record)
-            latest = df.iloc[-1]
-            if pd.notnull(latest['ref_min']) and pd.notnull(latest['ref_max']):
-                fig.add_hrect(y0=latest['ref_min'], y1=latest['ref_max'], 
-                              fillcolor="rgba(0, 255, 0, 0.1)", line_width=0, layer="below")
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    """Register page"""
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip()
+        password = request.form.get('password', '').strip()
+        password_confirm = request.form.get('password_confirm', '').strip()
+        
+        # Validation
+        if not email or not password:
+            flash('Email and password are required', 'danger')
+            return redirect(url_for('register'))
+        
+        if password != password_confirm:
+            flash('Passwords do not match', 'danger')
+            return redirect(url_for('register'))
+        
+        if len(password) < 6:
+            flash('Password must be at least 6 characters', 'danger')
+            return redirect(url_for('register'))
+        
+        try:
+            conn = sqlite3.connect('health_data.db')
+            cursor = conn.cursor()
             
-            # 2. Add Trend Line (date-only, no time)
-            dates = df['date'].astype(str).str[:10]  # ensure YYYY-MM-DD
-            fig.add_trace(go.Scatter(x=dates.tolist(), y=df['value'].tolist(), mode='lines+markers', name=selected_name))
-            fig.update_layout(
-                title=f"Trend: {selected_name}",
-                xaxis_title="Date",
-                yaxis_title=latest['unit'],
-                xaxis_type="category",
+            # Check if user exists
+            cursor.execute('SELECT id FROM users WHERE email = ?', (email,))
+            if cursor.fetchone():
+                flash('Email already registered', 'warning')
+                conn.close()
+                return redirect(url_for('register'))
+            
+            # Create user
+            import uuid
+            user_id = str(uuid.uuid4())
+            password_hash = generate_password_hash(password)
+            cursor.execute(
+                'INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)',
+                (user_id, email, password_hash)
             )
-            graph_json = json.loads(fig.to_json())
+            conn.commit()
+            conn.close()
             
-    conn.close()
+            flash('Account created! Please log in.', 'success')
+            return redirect(url_for('login_page'))
+        except Exception as e:
+            flash(f'Registration error: {str(e)}', 'danger')
+            return redirect(url_for('register'))
+    
+    return render_template('register.html')
+
+@app.route('/login', methods=['GET', 'POST'])
+def login_page():
+    """Login page"""
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip()
+        password = request.form.get('password', '').strip()
+        
+        if not email or not password:
+            flash('Email and password are required', 'danger')
+            return redirect(url_for('login_page'))
+        
+        try:
+            conn = sqlite3.connect('health_data.db')
+            cursor = conn.cursor()
+            cursor.execute('SELECT id, password_hash FROM users WHERE email = ?', (email,))
+            user = cursor.fetchone()
+            conn.close()
+            
+            if not user or not check_password_hash(user[1], password):
+                flash('Invalid email or password', 'danger')
+                return redirect(url_for('login_page'))
+            
+            # Login successful
+            session['user_id'] = user[0]
+            session['email'] = email
+            flash(f'Welcome back, {email}!', 'success')
+            return redirect(url_for('dashboard'))
+        except Exception as e:
+            flash(f'Login error: {str(e)}', 'danger')
+            return redirect(url_for('login_page'))
+    
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    """Logout"""
+    session.clear()
+    flash('Logged out successfully', 'info')
+    return redirect(url_for('login_page'))
+
+@app.route('/dashboard')
+@require_login
+def dashboard():
+    """Dashboard - accessible only to authenticated users"""
+    user_id = get_current_user()
     return render_template(
         'index.html',
-        names=names,
-        graph_json=graph_json,
-        selected=selected_name,
-        processed_date=processed_date,
-        processed_results=processed_results,
+        names=[],
+        graph_json=None,
+        selected=None,
+        processed_date=None,
+        processed_results=None,
     )
 
+@app.route('/api/investigations', methods=['GET'])
+@require_login
+def get_investigations():
+    """Get list of investigations for the current user."""
+    user_id = get_current_user()
+    try:
+        conn = sqlite3.connect('health_data.db')
+        names = pd.read_sql("SELECT DISTINCT name FROM labs WHERE user_id = ?", conn, params=(user_id,))['name'].tolist()
+        conn.close()
+        return jsonify({"investigations": sorted(names)}), 200
+    except Exception as e:
+        _processing_log.error(f"Error fetching investigations for user {user_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/investigation/<investigation_name>', methods=['GET'])
+@require_login
+def get_investigation_data(investigation_name):
+    """Get chart data for a specific investigation."""
+    user_id = get_current_user()
+    try:
+        conn = sqlite3.connect('health_data.db')
+        df = pd.read_sql(f"SELECT * FROM labs WHERE user_id = ? AND name = ? ORDER BY date", conn, params=(user_id, investigation_name,))
+        conn.close()
+        
+        if df.empty:
+            return jsonify({"error": "No data found"}), 404
+        
+        fig = go.Figure()
+        latest = df.iloc[-1]
+        if pd.notnull(latest['ref_min']) and pd.notnull(latest['ref_max']):
+            fig.add_hrect(y0=latest['ref_min'], y1=latest['ref_max'], 
+                          fillcolor="rgba(0, 255, 0, 0.1)", line_width=0, layer="below")
+        
+        dates = df['date'].astype(str).str[:10]
+        fig.add_trace(go.Scatter(x=dates.tolist(), y=df['value'].tolist(), mode='lines+markers', name=investigation_name))
+        fig.update_layout(
+            title=f"Trend: {investigation_name}",
+            xaxis_title="Date",
+            yaxis_title=latest['unit'],
+            xaxis_type="category",
+        )
+        graph_json = json.loads(fig.to_json())
+        return jsonify({"graph": graph_json}), 200
+    except Exception as e:
+        _processing_log.error(f"Error fetching investigation data for user {user_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/upload', methods=['POST'])
+@require_login
 def upload_file():
-    if 'file' not in request.files: return redirect(request.url)
-    file = request.files['file']
-    if file.filename == '': return redirect(request.url)
+    user_id = get_current_user()
+    if 'file' not in request.files:
+        return jsonify({"error": "No file provided"}), 400
     
-    path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
-    file.save(path)
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "No file selected"}), 400
+    
+    try:
+        path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
+        file.save(path)
 
-    # 1. Extract lab results (backend only)
-    data = extract_lab_report_openai(path)
+        # 1. Extract lab results (backend only)
+        data = extract_lab_report_openai(path)
 
-    # 2. Process and store: resolve canonical names, unit conversion, ref sanity check
+        # 2. Process and store: resolve canonical names, unit conversion, ref sanity check
+        conn = sqlite3.connect('health_data.db')
+        process_and_store_report(conn, user_id, data)
+        conn.commit()
+        conn.close()
+
+        return jsonify({"success": True, "processed_date": data.date, "message": "File processed successfully"}), 200
+    except Exception as e:
+        _processing_log.error(f"Upload error for user {user_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/assessment', methods=['POST'])
+@require_login
+def assessment():
+    user_id = get_current_user()
+    payload = request.get_json(silent=True) or {}
+    selected_name = (payload.get('investigation') or '').strip()
+    if not selected_name:
+        return jsonify({"error": "Missing investigation name."}), 400
+
     conn = sqlite3.connect('health_data.db')
-    process_and_store_report(conn, data)
+    df = pd.read_sql(
+        "SELECT date, value, unit, ref_min, ref_max FROM labs WHERE user_id = ? AND name = ? ORDER BY date",
+        conn,
+        params=(user_id, selected_name,),
+    )
+
+    if df.empty:
+        conn.close()
+        return jsonify({"error": "No data found for selected investigation."}), 404
+
+    trend_rows = []
+    for _, row in df.tail(8).iterrows():
+        trend_rows.append(
+            {
+                "date": str(row["date"])[:10],
+                "value": float(row["value"]),
+                "ref_min": float(row["ref_min"]) if pd.notnull(row["ref_min"]) else None,
+                "ref_max": float(row["ref_max"]) if pd.notnull(row["ref_max"]) else None,
+            }
+        )
+
+    latest = trend_rows[-1]
+    cached = _load_cached_assessment(conn, user_id, selected_name, latest)
+    if cached:
+        conn.close()
+        return jsonify(cached)
+
+    latest_unit = str(df.iloc[-1]["unit"])
+    out = _get_deeper_assessment(selected_name, latest_unit, trend_rows)
+    _save_cached_assessment(conn, user_id, selected_name, latest, out)
     conn.commit()
     conn.close()
-
-    return redirect(url_for('index', processed=data.date))
+    return jsonify(out)
 
 if __name__ == '__main__':
     init_db()

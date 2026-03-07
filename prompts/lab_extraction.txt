@@ -10,6 +10,12 @@ For each parameter:
 - "name": the same parameter in standard English (e.g. "Hemoglobin", "Fasting Blood Glucose").
 - value, unit, ref_min, ref_max as in the report.
 
+CRITICAL - Handling reference ranges with < and > symbols:
+- If a reference range shows "<10" (less than 10): set ref_min = 0, ref_max = 10
+- If a reference range shows ">100" (greater than 100): set ref_min = 100, ref_max = null
+- If a reference range shows "<10–100" (less than 10 to 100): set ref_min = 0, ref_max = 100
+- Always convert < to a min of 0 and > to a min of that value, with the other bound as null if not specified.
+
 Return only valid JSON with this structure:
 {
   "date": "YYYY-MM-DD",
