@@ -12,6 +12,7 @@ import logging
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
+import uuid
 
 dotenv.load_dotenv()
 
@@ -127,6 +128,28 @@ def _strip_json_markdown(text: str) -> str:
     return text.strip()
 
 
+def _strip_markdown(text: str) -> str:
+    """Remove markdown formatting for chat display."""
+    import re
+    text = text.strip()
+    # Remove code blocks
+    text = re.sub(r"```[\s\S]*?```", "", text)
+    # Remove inline code
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    # Remove bold/italic
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = re.sub(r"\*([^*]+)\*", r"\1", text)
+    text = re.sub(r"__([^_]+)__", r"\1", text)
+    text = re.sub(r"_([^_]+)_", r"\1", text)
+    # Remove links but keep text
+    text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", text)
+    # Remove headers
+    text = re.sub(r"^#+\s+", "", text, flags=re.MULTILINE)
+    # Clean up extra whitespace
+    text = re.sub(r"\n\n+", "\n\n", text)
+    return text.strip()
+
+
 def extract_lab_report_openai(path: str, model_name: str = "gpt-4o") -> LabReport:
     """Extract lab results using OpenAI VLM (PDF + images via file upload + Responses API)."""
     prompt = _load_prompt("lab_extraction")
@@ -179,6 +202,24 @@ def init_db():
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (user_id, name),
             FOREIGN KEY (user_id, name) REFERENCES parameters(user_id, canonical_name)
+        );
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            title TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (session_id) REFERENCES chat_sessions(id),
+            FOREIGN KEY (user_id) REFERENCES users(id)
         );
     """)
     conn.close()
@@ -460,6 +501,176 @@ def _save_cached_assessment(conn: sqlite3.Connection, user_id: str, name: str, l
     )
 
 
+def _ensure_chat_tables(conn: sqlite3.Connection) -> None:
+    """Ensure chat tables exist for older DB files."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            title TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (session_id) REFERENCES chat_sessions(id),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+        """
+    )
+
+
+def _resolve_investigation_from_query(
+    conn: sqlite3.Connection,
+    user_id: str,
+    query: str,
+) -> tuple[str | None, str]:
+    """Resolve free-text query to one known investigation for the user."""
+    rows = conn.execute(
+        "SELECT DISTINCT name FROM labs WHERE user_id = ? ORDER BY name",
+        (user_id,),
+    ).fetchall()
+    names = [r[0] for r in rows if r and r[0]]
+    if not names:
+        return None, "no-investigations"
+
+    q = query.strip().lower()
+    if not q:
+        return None, "empty-query"
+
+    by_lower = {n.lower(): n for n in names}
+    if q in by_lower:
+        return by_lower[q], "exact"
+
+    contains = [n for n in names if n.lower() in q or q in n.lower()]
+    if len(contains) == 1:
+        return contains[0], "substring"
+
+    if openai_client:
+        prompt = (
+            "Map this user query to exactly one investigation name from candidates. "
+            "Return JSON only with keys: name (string or null), reason (string). "
+            "Never invent names outside candidates."
+        )
+        try:
+            response = openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {
+                        "role": "user",
+                        "content": json.dumps({"query": query, "candidates": names}),
+                    },
+                ],
+                response_format={"type": "json_object"},
+            )
+            out = json.loads(_strip_json_markdown(response.choices[0].message.content or "{}"))
+            chosen = str(out.get("name") or "").strip()
+            if chosen in names:
+                return chosen, "llm"
+        except Exception as e:
+            _processing_log.warning("Query-to-investigation mapping failed: %s", e)
+
+    q_tokens = set(q.replace("_", " ").split())
+    best_name = None
+    best_score = 0
+    for name in names:
+        n_tokens = set(name.lower().replace("_", " ").split())
+        score = len(q_tokens & n_tokens)
+        if score > best_score:
+            best_name = name
+            best_score = score
+
+    if best_name and best_score > 0:
+        return best_name, "token-overlap"
+    return None, "no-match"
+
+
+def _build_lab_context(conn: sqlite3.Connection, user_id: str) -> tuple[pd.DataFrame, str]:
+    """Load user labs and build concise context for chat prompts."""
+    df = pd.read_sql(
+        "SELECT date, name, value, unit, ref_min, ref_max FROM labs WHERE user_id = ? ORDER BY date",
+        conn,
+        params=(user_id,),
+    )
+    if df.empty:
+        return df, "No lab records available for this user."
+
+    latest_date = str(df['date'].iloc[-1])[:10]
+    prev_dates = sorted({str(d)[:10] for d in df['date'].tolist()})
+    prev_date = prev_dates[-2] if len(prev_dates) > 1 else None
+    names = sorted(df['name'].dropna().unique().tolist())
+    context = {
+        "latest_report_date": latest_date,
+        "previous_report_date": prev_date,
+        "investigations": names,
+        "total_records": int(len(df)),
+    }
+    return df, json.dumps(context)
+
+
+def _generate_chat_reply(message: str, history: list[dict], df: pd.DataFrame, context_json: str) -> str:
+    """Generate conversational response using OpenAI with lab context."""
+    if df.empty:
+        return "I could not find any lab reports yet. Please upload a report first, then ask your question again."
+
+    # Keep prompt payload bounded for responsiveness.
+    compact_df = df.tail(120).copy()
+    compact_records = compact_df.to_dict(orient='records')
+
+    if not openai_client:
+        return (
+            "I can compare your latest and previous reports, summarize trends, and explain changes. "
+            "OpenAI API is not configured, so detailed AI analysis is currently unavailable."
+        )
+
+    system_prompt = (
+        "You are a concise lab-report assistant. Use only provided data. "
+        "Do not diagnose or prescribe medication. "
+        "If user asks to compare current vs last report, provide a short comparison summary. "
+        "When uncertain, say what data is missing."
+    )
+
+    messages = [{"role": "system", "content": system_prompt}]
+    for item in history[-8:]:
+        role = item.get('role')
+        content = item.get('content')
+        if role in {'user', 'assistant'} and content:
+            messages.append({"role": role, "content": content})
+
+    messages.append(
+        {
+            "role": "user",
+            "content": (
+                f"Lab context: {context_json}\n"
+                f"Recent lab rows (JSON): {json.dumps(compact_records)}\n"
+                f"User question: {message}\n"
+                "Respond in plain text with key findings first, then brief explanation."
+            ),
+        }
+    )
+
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            temperature=0.2,
+        )
+        raw_reply = (response.choices[0].message.content or "").strip()
+        cleaned_reply = _strip_markdown(raw_reply)
+        return cleaned_reply or "I could not generate a response."
+    except Exception as e:
+        _processing_log.warning("Chat response generation failed: %s", e)
+        return "I ran into an issue while analyzing your data. Please try again."
+
+
 def process_and_store_report(conn: sqlite3.Connection, user_id: str, data: LabReport) -> None:
     """Resolve canonical names, convert units (LLM when name+unit exist in DB), apply ref sanity check, insert."""
     for res in data.results:
@@ -671,6 +882,198 @@ def get_investigation_data(investigation_name):
         return jsonify({"graph": graph_json}), 200
     except Exception as e:
         _processing_log.error(f"Error fetching investigation data for user {user_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/chat/sessions', methods=['GET'])
+@require_login
+def get_chat_sessions():
+    """Return recent chat sessions for current user."""
+    user_id = get_current_user()
+    try:
+        conn = sqlite3.connect('health_data.db')
+        _ensure_chat_tables(conn)
+        rows = conn.execute(
+            """
+            SELECT id, COALESCE(title, 'Untitled chat') AS title, created_at, updated_at
+            FROM chat_sessions
+            WHERE user_id = ?
+            ORDER BY updated_at DESC
+            LIMIT 20
+            """,
+            (user_id,),
+        ).fetchall()
+        conn.close()
+        sessions = [
+            {
+                "id": r[0],
+                "title": r[1],
+                "created_at": r[2],
+                "updated_at": r[3],
+            }
+            for r in rows
+        ]
+        return jsonify({"sessions": sessions}), 200
+    except Exception as e:
+        _processing_log.error(f"Error loading chat sessions for user {user_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/chat/messages/<session_id>', methods=['GET'])
+@require_login
+def get_chat_messages(session_id):
+    """Return full message history for one chat session."""
+    user_id = get_current_user()
+    try:
+        conn = sqlite3.connect('health_data.db')
+        _ensure_chat_tables(conn)
+
+        session_row = conn.execute(
+            "SELECT id FROM chat_sessions WHERE id = ? AND user_id = ?",
+            (session_id, user_id),
+        ).fetchone()
+        if not session_row:
+            conn.close()
+            return jsonify({"error": "Session not found."}), 404
+
+        rows = conn.execute(
+            """
+            SELECT id, role, content, created_at
+            FROM chat_messages
+            WHERE session_id = ? AND user_id = ?
+            ORDER BY created_at ASC
+            """,
+            (session_id, user_id),
+        ).fetchall()
+        conn.close()
+
+        messages = [
+            {
+                "id": r[0],
+                "role": r[1],
+                "content": r[2],
+                "created_at": r[3],
+            }
+            for r in rows
+        ]
+        return jsonify({"messages": messages}), 200
+    except Exception as e:
+        _processing_log.error(f"Error loading chat messages for user {user_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/chat/query', methods=['POST'])
+@require_login
+def chat_query():
+    """Chat endpoint with per-user memory and optional graph response."""
+    user_id = get_current_user()
+    payload = request.get_json(silent=True) or {}
+    message = (payload.get('message') or '').strip()
+    session_id = (payload.get('session_id') or '').strip()
+
+    if not message:
+        return jsonify({"error": "Message is required."}), 400
+
+    try:
+        conn = sqlite3.connect('health_data.db')
+        _ensure_chat_tables(conn)
+
+        if session_id:
+            exists = conn.execute(
+                "SELECT id FROM chat_sessions WHERE id = ? AND user_id = ?",
+                (session_id, user_id),
+            ).fetchone()
+            if not exists:
+                conn.close()
+                return jsonify({"error": "Session not found."}), 404
+        else:
+            session_id = str(uuid.uuid4())
+            title = message[:80]
+            conn.execute(
+                "INSERT INTO chat_sessions (id, user_id, title) VALUES (?, ?, ?)",
+                (session_id, user_id, title),
+            )
+
+        user_message_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO chat_messages (id, session_id, user_id, role, content) VALUES (?, ?, ?, ?, ?)",
+            (user_message_id, session_id, user_id, 'user', message),
+        )
+
+        history_rows = conn.execute(
+            """
+            SELECT role, content
+            FROM chat_messages
+            WHERE session_id = ? AND user_id = ?
+            ORDER BY created_at ASC
+            """,
+            (session_id, user_id),
+        ).fetchall()
+        history = [{"role": r[0], "content": r[1]} for r in history_rows]
+
+        df, context_json = _build_lab_context(conn, user_id)
+        reply = _generate_chat_reply(message, history, df, context_json)
+
+        matched_name, match_method = _resolve_investigation_from_query(conn, user_id, message)
+        graph = None
+        if matched_name:
+            inv_df = pd.read_sql(
+                "SELECT * FROM labs WHERE user_id = ? AND name = ? ORDER BY date",
+                conn,
+                params=(user_id, matched_name),
+            )
+            if not inv_df.empty:
+                fig = go.Figure()
+                latest = inv_df.iloc[-1]
+                if pd.notnull(latest['ref_min']) and pd.notnull(latest['ref_max']):
+                    fig.add_hrect(
+                        y0=latest['ref_min'],
+                        y1=latest['ref_max'],
+                        fillcolor="rgba(0, 255, 0, 0.1)",
+                        line_width=0,
+                        layer="below",
+                    )
+
+                dates = inv_df['date'].astype(str).str[:10]
+                fig.add_trace(
+                    go.Scatter(
+                        x=dates.tolist(),
+                        y=inv_df['value'].tolist(),
+                        mode='lines+markers',
+                        name=matched_name,
+                    )
+                )
+                fig.update_layout(
+                    title=f"Trend: {matched_name}",
+                    xaxis_title="Date",
+                    yaxis_title=latest['unit'],
+                    xaxis_type="category",
+                )
+                graph = json.loads(fig.to_json())
+
+        assistant_message_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO chat_messages (id, session_id, user_id, role, content) VALUES (?, ?, ?, ?, ?)",
+            (assistant_message_id, session_id, user_id, 'assistant', reply),
+        )
+        conn.execute(
+            "UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?",
+            (session_id, user_id),
+        )
+        conn.commit()
+        conn.close()
+
+        return jsonify(
+            {
+                "session_id": session_id,
+                "reply": reply,
+                "matched_investigation": matched_name,
+                "match_method": match_method if matched_name else None,
+                "graph": graph,
+            }
+        ), 200
+    except Exception as e:
+        _processing_log.error(f"Chat query error for user {user_id}: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/upload', methods=['POST'])

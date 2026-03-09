@@ -13,6 +13,35 @@
             background: linear-gradient(135deg, #f093fb22 0%, #f5576c22 100%);
             border-left: 4px solid #f093fb;
         }
+        .section-chat {
+            background: linear-gradient(135deg, #36d1dc22 0%, #5b86e522 100%);
+            border-left: 4px solid #36d1dc;
+        }
+        .chat-window {
+            min-height: 260px;
+            max-height: 420px;
+            overflow-y: auto;
+            background: #ffffff;
+            border: 1px solid #e9ecef;
+            border-radius: 10px;
+            padding: 12px;
+        }
+        .chat-bubble {
+            max-width: 85%;
+            padding: 10px 12px;
+            border-radius: 12px;
+            margin-bottom: 10px;
+            white-space: pre-wrap;
+        }
+        .chat-user {
+            margin-left: auto;
+            background: #d1ecf1;
+        }
+        .chat-assistant {
+            margin-right: auto;
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+        }
         .navbar-custom {
             background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
         }
@@ -86,6 +115,24 @@
                     <ul id="analysis-tips" class="mb-0"></ul>
                 </div>
             </div>
+        </div>
+
+        <!-- SECTION 3: Chat Assistant with Memory -->
+        <div class="card p-4 mb-5 section-chat">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h4 class="mb-0">💬 Lab Chat Assistant</h4>
+                <button id="new-chat-btn" class="btn btn-outline-primary btn-sm">New Chat</button>
+            </div>
+            <p class="text-muted mb-3">Ask follow-up questions like "compare current report vs last report" and continue the same conversation.</p>
+
+            <div id="chat-window" class="chat-window mb-3"></div>
+            <div id="chat-match" class="small text-muted mb-2"></div>
+            <div id="chat-chart" style="min-height: 280px;"></div>
+
+            <form id="chat-form" class="d-flex gap-2 mt-3">
+                <input id="chat-input" type="text" class="form-control" placeholder="Ask about trends, comparisons, or out-of-range values" required>
+                <button type="submit" class="btn btn-primary px-4">Send</button>
+            </form>
         </div>
     </div>
     
@@ -276,6 +323,152 @@
                     analyzeBtn.textContent = '🔍 Get Deeper Analysis';
                 });
             });
+        })();
+
+        // Chat assistant with session memory
+        (function() {
+            var chatForm = document.getElementById('chat-form');
+            var chatInput = document.getElementById('chat-input');
+            var chatWindow = document.getElementById('chat-window');
+            var newChatBtn = document.getElementById('new-chat-btn');
+            var chatMatch = document.getElementById('chat-match');
+            var currentSessionId = null;
+
+            if (!chatForm || !chatInput || !chatWindow) {
+                return;
+            }
+
+            function appendMessage(role, text) {
+                var bubble = document.createElement('div');
+                bubble.className = 'chat-bubble ' + (role === 'user' ? 'chat-user' : 'chat-assistant');
+                bubble.textContent = text;
+                chatWindow.appendChild(bubble);
+                chatWindow.scrollTop = chatWindow.scrollHeight;
+            }
+
+            function clearChatUi() {
+                chatWindow.innerHTML = '';
+                if (chatMatch) {
+                    chatMatch.textContent = '';
+                }
+                var chartDiv = document.getElementById('chat-chart');
+                if (chartDiv) {
+                    chartDiv.innerHTML = '';
+                }
+            }
+
+            function loadLatestSession() {
+                fetch('/api/chat/sessions', { method: 'GET' })
+                .then(function(res) {
+                    if (res.status === 401) {
+                        window.location.href = '/login';
+                        throw new Error('Unauthorized');
+                    }
+                    return res.json();
+                })
+                .then(function(data) {
+                    if (!data.sessions || !data.sessions.length) {
+                        appendMessage('assistant', 'I am ready. Ask your first question about your lab reports.');
+                        return;
+                    }
+                    currentSessionId = data.sessions[0].id;
+                    return fetch('/api/chat/messages/' + encodeURIComponent(currentSessionId), { method: 'GET' });
+                })
+                .then(function(res) {
+                    if (!res) {
+                        return null;
+                    }
+                    return res.json();
+                })
+                .then(function(data) {
+                    if (!data || !Array.isArray(data.messages)) {
+                        return;
+                    }
+                    clearChatUi();
+                    data.messages.forEach(function(msg) {
+                        appendMessage(msg.role, msg.content || '');
+                    });
+                })
+                .catch(function() {
+                    if (!chatWindow.innerHTML) {
+                        appendMessage('assistant', 'I am ready. Ask your first question about your lab reports.');
+                    }
+                });
+            }
+
+            newChatBtn?.addEventListener('click', function() {
+                currentSessionId = null;
+                clearChatUi();
+                appendMessage('assistant', 'Started a new chat. What would you like to analyze?');
+            });
+
+            chatForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+                var message = chatInput.value.trim();
+                if (!message) {
+                    return;
+                }
+
+                appendMessage('user', message);
+                chatInput.value = '';
+
+                var submitBtn = chatForm.querySelector('button[type="submit"]');
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.textContent = 'Thinking...';
+                }
+
+                fetch('/api/chat/query', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        message: message,
+                        session_id: currentSessionId
+                    })
+                })
+                .then(function(res) {
+                    if (res.status === 401) {
+                        window.location.href = '/login';
+                        throw new Error('Unauthorized');
+                    }
+                    return res.json().then(function(data) {
+                        return { ok: res.ok, data: data };
+                    });
+                })
+                .then(function(result) {
+                    if (!result.ok) {
+                        throw new Error(result.data.error || 'Chat request failed');
+                    }
+
+                    currentSessionId = result.data.session_id || currentSessionId;
+                    appendMessage('assistant', result.data.reply || 'No response returned.');
+
+                    if (chatMatch) {
+                        if (result.data.matched_investigation) {
+                            chatMatch.textContent = 'Matched investigation for chart: ' + result.data.matched_investigation + ' (' + result.data.match_method + ')';
+                        } else {
+                            chatMatch.textContent = '';
+                        }
+                    }
+
+                    if (result.data.graph) {
+                        Plotly.newPlot('chat-chart', result.data.graph.data, result.data.graph.layout || {});
+                    }
+                })
+                .catch(function(err) {
+                    appendMessage('assistant', 'Error: ' + err.message);
+                })
+                .finally(function() {
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = 'Send';
+                    }
+                });
+            });
+
+            loadLatestSession();
         })();
     </script>
 </body>

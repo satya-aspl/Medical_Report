@@ -5,6 +5,7 @@ plotly
 pydantic
 python-dotenv
 openai
+pandasai
 google-genai
 pyjwt
 flask-cors
