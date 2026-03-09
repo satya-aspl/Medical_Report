@@ -62,7 +62,7 @@ def _load_prompt(name: str) -> str:
 class LabResult(BaseModel):
     name_original: str = ""  # As on report (optional from LLM)
     name: str  # English / canonical
-    value: float
+    value: float | None
     unit: str
     ref_min: float | None
     ref_max: float | None
@@ -463,6 +463,17 @@ def _save_cached_assessment(conn: sqlite3.Connection, user_id: str, name: str, l
 def process_and_store_report(conn: sqlite3.Connection, user_id: str, data: LabReport) -> None:
     """Resolve canonical names, convert units (LLM when name+unit exist in DB), apply ref sanity check, insert."""
     for res in data.results:
+        # Some OCR/LLM outputs include rows without numeric values; skip instead of failing the full upload.
+        if res.value is None:
+            _processing_log.warning(
+                "Skipping lab row with missing value | user=%s | report_date=%s | name=%s | original=%s",
+                user_id,
+                data.date,
+                res.name,
+                res.name_original,
+            )
+            continue
+
         canonical = _resolve_canonical_name(conn, user_id, res.name_original, res.name)
         aliases = list(dict.fromkeys([x for x in (res.name.strip(), res.name_original.strip()) if x]))
         default_unit = res.unit
