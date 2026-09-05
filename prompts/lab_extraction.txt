@@ -1,14 +1,40 @@
-Extract lab results from this document.
+Extract lab results from this document. It may contain a single panel (e.g. blood only)
+or multiple panels from different specimens (e.g. a blood/serum panel plus a urine
+panel, urinalysis, or microalbumin/creatinine ratio) in the same report.
 
 CRITICAL - Date:
 - Use ONLY the report date: the date when the lab report was issued / sample collected, as printed on the report (e.g. "Report Date", "Collection Date", , "Abnahmedatum", "Date of Report").
 - Do NOT use the patient's date of birth (DOB), or any other date. Only the report/specimen date.
 - Output the date in YYYY-MM-DD format.
 
-For each parameter:
-- "name_original": the exact parameter name as written on the report (e.g. "Hb", "FBS").
-- "name": the same parameter in standard English (e.g. "Hemoglobin", "Fasting Blood Glucose").
+CRITICAL - Specimen tagging (for combined reports):
+- Every result has a "specimen" field: "blood" (default, covers blood/serum/plasma) or "urine" (or another
+  specimen type if clearly printed, e.g. "stool", "csf").
+- Set "specimen" to the actual specimen that parameter was measured from, based on the section/panel
+  heading on the report (e.g. "Urinalysis", "Urine Chemistry", "Urine Microalbumin/Creatinine Ratio").
+- This matters because a report can list the same parameter name from two different specimens
+  (e.g. "Creatinine" in the blood/serum panel and "Creatinine" in a urine panel) — tagging the
+  specimen correctly keeps them from being confused with each other.
+
+CRITICAL - Numeric parameters (the "results" array):
+For each NUMERIC parameter (a parameter with a measurable value, from any panel/specimen):
+- "name_original": the exact parameter name as written on the report (e.g. "Hb", "FBS", "Urine Creatinine").
+- "name": the same parameter in standard English (e.g. "Hemoglobin", "Fasting Blood Glucose", "Creatinine").
+- "specimen": as described above.
 - value, unit, ref_min, ref_max as in the report.
+- Only include this in "results" if the value is genuinely a number (including decimals). Do NOT force a
+  qualitative/descriptive result (see below) into a fake numeric value.
+
+CRITICAL - Qualitative / non-numeric findings (the "findings" field):
+- Some results — especially from urinalysis/dipstick sections — are qualitative or semi-quantitative
+  and are not a plain number: e.g. "Negative", "Trace", "Nil", "1+", "2-4/hpf", "Pale Yellow", "Clear",
+  "Occasional". Do NOT put these in "results" (they cannot be represented as a float).
+- Instead, collect all such qualitative observations from anywhere in the report into one "findings"
+  string: concise "Parameter: value" lines separated by "; " (e.g. "Urine Protein: Trace; Urine Glucose:
+  Negative; Pus Cells: 2-4/hpf; Epithelial Cells: Occasional; Colour: Pale Yellow; Appearance: Clear").
+- Also include any printed overall impression/comment/conclusion text here, appended after the
+  Parameter: value list.
+- Use an empty string "" if there are no qualitative findings or impression text on the report.
 
 CRITICAL - Handling reference ranges with < and > symbols:
 - If a reference range shows "<10" (less than 10): set ref_min = 0, ref_max = 10
@@ -19,10 +45,12 @@ CRITICAL - Handling reference ranges with < and > symbols:
 Return only valid JSON with this structure:
 {
   "date": "YYYY-MM-DD",
+  "findings": "str (qualitative results and/or impression text, or empty string)",
   "results": [
     {
       "name_original": "str (as on report)",
       "name": "str (English)",
+      "specimen": "blood" or "urine" (or other specimen type),
       "value": float,
       "unit": "str",
       "ref_min": float or null,

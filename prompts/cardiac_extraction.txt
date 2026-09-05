@@ -1,0 +1,46 @@
+Extract results from this cardiac report (ECG/EKG or ECHO/2D-Echo/Echocardiogram).
+
+CRITICAL - Modality:
+- Set "modality" to "ECG" if this is an electrocardiogram/EKG (rhythm strip, rate, intervals, axis).
+- Set "modality" to "ECHO" if this is an echocardiogram/2D-echo/Doppler study (chamber sizes, wall thickness, ejection fraction, valves).
+
+CRITICAL - Date:
+- Use ONLY the report date: the date when the study was performed / report issued, as printed on the report.
+- Do NOT use the patient's date of birth (DOB), or any other date. Only the report/study date.
+- Output the date in YYYY-MM-DD format.
+
+CRITICAL - Findings:
+- "findings": the printed impression / conclusion / interpretation text (e.g. "Normal sinus rhythm", "Mild LV dysfunction, EF 45%, no regional wall motion abnormality"). Use the report's own wording, condensed to a few concise sentences. Use an empty string if none is printed.
+
+For each NUMERIC parameter found on the report, output one entry in "results":
+- "name_original": the exact parameter name/abbreviation as written on the report (e.g. "HR", "EF", "LVIDd").
+- "name": the same parameter in standard, full English (e.g. "Heart Rate", "Ejection Fraction", "LV Internal Diameter Diastole").
+- value, unit, ref_min, ref_max as printed on the report.
+
+Typical ECG numeric parameters: Heart Rate, PR Interval, QRS Duration, QT Interval, QTc, P Axis, QRS Axis, T Axis.
+Typical ECHO numeric parameters: Ejection Fraction (EF%), LVIDd, LVIDs, IVS thickness, LVPW thickness, LA diameter, Aortic Root diameter, RVSP, E/A ratio.
+Only include parameters actually present on the report — do not invent values.
+
+CRITICAL - Handling reference ranges with < and > symbols:
+- If a reference range shows "<10" (less than 10): set ref_min = 0, ref_max = 10
+- If a reference range shows ">100" (greater than 100): set ref_min = 100, ref_max = null
+- If a reference range shows "<10–100" (less than 10 to 100): set ref_min = 0, ref_max = 100
+- Always convert < to a min of 0 and > to a min of that value, with the other bound as null if not specified.
+- If no reference range is printed for a parameter, set ref_min and ref_max to null.
+
+Return only valid JSON with this structure:
+{
+  "date": "YYYY-MM-DD",
+  "modality": "ECG" or "ECHO",
+  "findings": "str (printed impression/conclusion, or empty string)",
+  "results": [
+    {
+      "name_original": "str (as on report)",
+      "name": "str (English)",
+      "value": float,
+      "unit": "str",
+      "ref_min": float or null,
+      "ref_max": float or null
+    }
+  ]
+}

@@ -67,7 +67,7 @@
     <!-- Navbar with User Info and Logout -->
     <nav class="navbar navbar-dark navbar-custom mb-4">
         <div class="container-fluid">
-            <span class="navbar-brand mb-0 h1">🩸 Lab Report Tracker</span>
+            <span class="navbar-brand mb-0 h1">🏥 Health Tracker</span>
             <div class="user-info">
                 <div class="user-avatar" id="user-avatar">U</div>
                 <span id="user-email" class="text-white" style="font-size: 14px;"></span>
@@ -78,64 +78,140 @@
 
     <div class="container mt-5">
         <h2 class="mb-4">📊 Your Health Dashboard</h2>
-        
-        <!-- SECTION 1: Upload New Reports -->
-        <div class="card p-4 mb-5 section-upload">
-            <h4 class="mb-3">📤 Upload New Lab Report</h4>
-            <p class="text-muted mb-3">Upload a PDF lab report to extract and store results automatically</p>
-            
-            <form id="upload-form" enctype="multipart/form-data" class="d-flex gap-2 mb-3">
-                <input type="file" name="file" class="form-control" accept=".pdf" required>
-                <button type="submit" class="btn btn-primary px-4">Process</button>
-            </form>
-        </div>
 
-        <!-- SECTION 2: Historical Analysis -->
-        <div class="card p-4 mb-5 section-analysis">
-            <h4 class="mb-3">📊 Historical Lab Analysis</h4>
-            <p class="text-muted mb-3">View trends and get AI-powered insights for your lab parameters</p>
-            
-            <form class="mb-4">
-                <label for="investigation-select" class="form-label fw-bold">Select Investigation:</label>
-                <select id="investigation-select" class="form-select">
-                    <option value="">-- Choose a parameter to view trend --</option>
-                </select>
-            </form>
+        <ul class="nav nav-tabs mb-4" id="report-domain-tabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="blood-tab-btn" data-bs-toggle="tab" data-bs-target="#blood-tab-pane" type="button" role="tab">🩸 Blood Reports</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="cardiac-tab-btn" data-bs-toggle="tab" data-bs-target="#cardiac-tab-pane" type="button" role="tab">❤️ Heart Reports</button>
+            </li>
+        </ul>
 
-            <div id="chart" style="min-height: 400px;"></div>
-            
-            <div id="analyze-btn-container" style="display: none;">
-                <div class="mt-4">
-                    <button id="analyze-btn" class="btn btn-success">🔍 Get Deeper Analysis</button>
+        <div class="tab-content">
+        <!-- ============================= BLOOD REPORTS TAB ============================= -->
+        <div class="tab-pane fade show active" id="blood-tab-pane" role="tabpanel">
+
+            <!-- SECTION 1: Upload New Reports -->
+            <div class="card p-4 mb-5 section-upload">
+                <h4 class="mb-3">📤 Upload New Lab Report</h4>
+                <p class="text-muted mb-3">Upload a PDF lab report to extract and store results automatically</p>
+
+                <form id="blood-upload-form" enctype="multipart/form-data" class="d-flex gap-2 mb-3">
+                    <input type="file" name="file" class="form-control" accept=".pdf" required>
+                    <button type="submit" class="btn btn-primary px-4">Process</button>
+                </form>
+            </div>
+
+            <!-- SECTION 2: Historical Analysis -->
+            <div class="card p-4 mb-5 section-analysis">
+                <h4 class="mb-3">📊 Historical Lab Analysis</h4>
+                <p class="text-muted mb-3">View trends and get AI-powered insights for your lab parameters</p>
+
+                <form class="mb-4">
+                    <label for="blood-investigation-select" class="form-label fw-bold">Select Investigation:</label>
+                    <select id="blood-investigation-select" class="form-select">
+                        <option value="">-- Choose a parameter to view trend --</option>
+                    </select>
+                </form>
+
+                <div id="blood-chart" style="min-height: 400px;"></div>
+
+                <div id="blood-analyze-btn-container" style="display: none;">
+                    <div class="mt-4">
+                        <button id="blood-analyze-btn" class="btn btn-success">🔍 Get Deeper Analysis</button>
+                    </div>
+                    <div id="blood-analysis-card" class="card p-3 mt-3 d-none border-success">
+                        <h5 class="mb-2 text-success">🤖 AI Assessment</h5>
+                        <p id="blood-analysis-summary" class="mb-2"></p>
+                        <strong>Recommendations:</strong>
+                        <ul id="blood-analysis-tips" class="mb-0"></ul>
+                    </div>
                 </div>
-                <div id="analysis-card" class="card p-3 mt-3 d-none border-success">
-                    <h5 class="mb-2 text-success">🤖 AI Assessment</h5>
-                    <p id="analysis-summary" class="mb-2"></p>
-                    <strong>Recommendations:</strong>
-                    <ul id="analysis-tips" class="mb-0"></ul>
+            </div>
+
+            <!-- SECTION 3: Chat Assistant with Memory -->
+            <div class="card p-4 mb-5 section-chat">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h4 class="mb-0">💬 Lab Chat Assistant</h4>
+                    <button id="blood-new-chat-btn" class="btn btn-outline-primary btn-sm">New Chat</button>
                 </div>
+                <p class="text-muted mb-3">Ask follow-up questions like "compare current report vs last report" and continue the same conversation.</p>
+
+                <div id="blood-chat-window" class="chat-window mb-3"></div>
+                <div id="blood-chat-match" class="small text-muted mb-2"></div>
+                <div id="blood-chat-chart" style="min-height: 280px;"></div>
+
+                <form id="blood-chat-form" class="d-flex gap-2 mt-3">
+                    <input id="blood-chat-input" type="text" class="form-control" placeholder="Ask about trends, comparisons, or out-of-range values" required>
+                    <button type="submit" class="btn btn-primary px-4">Send</button>
+                </form>
             </div>
         </div>
 
-        <!-- SECTION 3: Chat Assistant with Memory -->
-        <div class="card p-4 mb-5 section-chat">
-            <div class="d-flex justify-content-between align-items-center mb-2">
-                <h4 class="mb-0">💬 Lab Chat Assistant</h4>
-                <button id="new-chat-btn" class="btn btn-outline-primary btn-sm">New Chat</button>
+        <!-- ============================= HEART REPORTS TAB ============================= -->
+        <div class="tab-pane fade" id="cardiac-tab-pane" role="tabpanel">
+
+            <!-- SECTION 1: Upload New Reports -->
+            <div class="card p-4 mb-5 section-upload">
+                <h4 class="mb-3">📤 Upload ECG / ECHO Report</h4>
+                <p class="text-muted mb-3">Upload an ECG or ECHO (echocardiogram) report as PDF or image — the modality is detected automatically</p>
+
+                <form id="cardiac-upload-form" enctype="multipart/form-data" class="d-flex gap-2 mb-3">
+                    <input type="file" name="file" class="form-control" accept=".pdf,.png,.jpg,.jpeg,.webp" required>
+                    <button type="submit" class="btn btn-primary px-4">Process</button>
+                </form>
             </div>
-            <p class="text-muted mb-3">Ask follow-up questions like "compare current report vs last report" and continue the same conversation.</p>
 
-            <div id="chat-window" class="chat-window mb-3"></div>
-            <div id="chat-match" class="small text-muted mb-2"></div>
-            <div id="chat-chart" style="min-height: 280px;"></div>
+            <!-- SECTION 2: Historical Analysis -->
+            <div class="card p-4 mb-5 section-analysis">
+                <h4 class="mb-3">📊 Historical Cardiac Analysis</h4>
+                <p class="text-muted mb-3">View trends and get AI-powered insights for your ECG/ECHO parameters</p>
 
-            <form id="chat-form" class="d-flex gap-2 mt-3">
-                <input id="chat-input" type="text" class="form-control" placeholder="Ask about trends, comparisons, or out-of-range values" required>
-                <button type="submit" class="btn btn-primary px-4">Send</button>
-            </form>
+                <form class="mb-4">
+                    <label for="cardiac-investigation-select" class="form-label fw-bold">Select Investigation:</label>
+                    <select id="cardiac-investigation-select" class="form-select">
+                        <option value="">-- Choose a parameter to view trend --</option>
+                    </select>
+                </form>
+
+                <div id="cardiac-chart" style="min-height: 400px;"></div>
+
+                <div id="cardiac-analyze-btn-container" style="display: none;">
+                    <div class="mt-4">
+                        <button id="cardiac-analyze-btn" class="btn btn-success">🔍 Get Deeper Analysis</button>
+                    </div>
+                    <div id="cardiac-analysis-card" class="card p-3 mt-3 d-none border-success">
+                        <h5 class="mb-2 text-success">🤖 AI Assessment</h5>
+                        <p id="cardiac-analysis-summary" class="mb-2"></p>
+                        <strong>Recommendations:</strong>
+                        <ul id="cardiac-analysis-tips" class="mb-0"></ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SECTION 3: Chat Assistant with Memory -->
+            <div class="card p-4 mb-5 section-chat">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h4 class="mb-0">💬 Heart Chat Assistant</h4>
+                    <button id="cardiac-new-chat-btn" class="btn btn-outline-primary btn-sm">New Chat</button>
+                </div>
+                <p class="text-muted mb-3">Ask about ECG/ECHO trends, comparisons, or printed findings, and continue the same conversation.</p>
+
+                <div id="cardiac-chat-window" class="chat-window mb-3"></div>
+                <div id="cardiac-chat-match" class="small text-muted mb-2"></div>
+                <div id="cardiac-chat-chart" style="min-height: 280px;"></div>
+
+                <form id="cardiac-chat-form" class="d-flex gap-2 mt-3">
+                    <input id="cardiac-chat-input" type="text" class="form-control" placeholder="Ask about trends, ejection fraction, rhythm findings..." required>
+                    <button type="submit" class="btn btn-primary px-4">Send</button>
+                </form>
+            </div>
+        </div>
         </div>
     </div>
-    
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script type="application/json" id="graph-data">{{ graph_json | tojson }}</script>
     <script>
         // Initialize page when loaded
@@ -147,9 +223,6 @@
                 const avatar = document.getElementById('user-avatar');
                 avatar.textContent = userEmail[0].toUpperCase();
             }
-            
-            // Load investigations
-            await loadInvestigations();
         });
 
         // Logout functionality
@@ -157,319 +230,311 @@
             window.location.href = '/logout';
         });
 
-        // Load investigations list
-        async function loadInvestigations() {
-            try {
-                const response = await fetch('/api/investigations', {
-                    method: 'GET'
-                });
+        // Generic report dashboard: upload + trend/assessment + memory chat.
+        // Instantiated once per domain (blood, cardiac) against a config of
+        // endpoint URLs and element-id prefixes, so the two tabs share one
+        // implementation instead of duplicating this logic per tab.
+        function initReportDashboard(cfg) {
+            const ids = (suffix) => document.getElementById(cfg.prefix + '-' + suffix);
 
-                if (response.status === 401) {
-                    window.location.href = '/login';
-                    return;
-                }
+            // --- Upload ---
+            const uploadForm = ids('upload-form');
+            uploadForm?.addEventListener('submit', async function(e) {
+                e.preventDefault();
 
-                const data = await response.json();
-                if (response.ok && data.investigations) {
-                    const select = document.getElementById('investigation-select');
-                    data.investigations.forEach(inv => {
-                        const option = document.createElement('option');
-                        option.value = inv;
-                        option.textContent = inv;
-                        select.appendChild(option);
+                const formData = new FormData(this);
+                const btn = this.querySelector('button[type="submit"]');
+                btn.disabled = true;
+                btn.textContent = 'Processing...';
+
+                try {
+                    const response = await fetch(cfg.uploadUrl, {
+                        method: 'POST',
+                        body: formData
                     });
-                }
-            } catch (error) {
-                console.error('Error loading investigations:', error);
-            }
-        }
 
-        // Handle investigation selection
-        document.getElementById('investigation-select')?.addEventListener('change', async function(e) {
-            const investigationName = this.value;
-            const analyzeBtn = document.getElementById('analyze-btn-container');
-            
-            if (!investigationName) {
-                if (analyzeBtn) analyzeBtn.style.display = 'none';
-                return;
-            }
+                    const result = await response.json();
 
-            try {
-                const response = await fetch(`/api/investigation/${encodeURIComponent(investigationName)}`, {
-                    method: 'GET'
-                });
-
-                if (response.status === 401) {
-                    window.location.href = '/login';
-                    return;
-                }
-
-                const data = await response.json();
-                if (response.ok && data.graph) {
-                    Plotly.newPlot('chart', data.graph.data, data.graph.layout || {});
-                    if (analyzeBtn) analyzeBtn.style.display = 'block';
-                    document.getElementById('analysis-card').classList.add('d-none');
-                }
-            } catch (error) {
-                console.error('Error loading investigation data:', error);
-            }
-        });
-
-        // Upload form handler
-        document.getElementById('upload-form')?.addEventListener('submit', async function(e) {
-            e.preventDefault();
-
-            const formData = new FormData(this);
-            const btn = this.querySelector('button[type="submit"]');
-            btn.disabled = true;
-            btn.textContent = 'Processing...';
-
-            try {
-                const response = await fetch('/upload', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                const result = await response.json();
-                
-                if (response.ok) {
-                    alert('File processed successfully!');
-                    window.location.href = '/dashboard';
-                } else if (response.status === 401) {
-                    alert('Session expired. Please login again.');
-                    window.location.href = '/login';
-                } else {
-                    alert('Upload failed: ' + (result.error || 'Unknown error'));
-                }
-            } catch (error) {
-                alert('Error uploading file: ' + error.message);
-            } finally {
-                btn.disabled = false;
-                btn.textContent = 'Process';
-            }
-        });
-
-        // Analysis button
-        (function() {
-            var analyzeBtn = document.getElementById('analyze-btn');
-            var card = document.getElementById('analysis-card');
-            var summary = document.getElementById('analysis-summary');
-            var tips = document.getElementById('analysis-tips');
-            var select = document.getElementById('investigation-select');
-            
-            if (!analyzeBtn) {
-                return;
-            }
-
-            analyzeBtn.addEventListener('click', function() {
-                const selectedInvestigation = select?.value;
-                if (!selectedInvestigation) {
-                    alert('Please select an investigation first.');
-                    return;
-                }
-
-                analyzeBtn.disabled = true;
-                analyzeBtn.textContent = 'Analyzing...';
-                if (summary) {
-                    summary.textContent = '';
-                }
-                if (tips) {
-                    tips.innerHTML = '';
-                }
-
-                fetch('/assessment', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ investigation: selectedInvestigation })
-                })
-                .then(function(res) { 
-                    if (res.status === 401) {
+                    if (response.ok) {
+                        alert('File processed successfully!');
+                        window.location.href = '/dashboard';
+                    } else if (response.status === 401) {
                         alert('Session expired. Please login again.');
                         window.location.href = '/login';
-                        throw new Error('Unauthorized');
+                    } else {
+                        alert('Upload failed: ' + (result.error || 'Unknown error'));
                     }
-                    return res.json(); 
-                })
-                .then(function(data) {
-                    if (data.error) {
-                        throw new Error(data.error);
+                } catch (error) {
+                    alert('Error uploading file: ' + error.message);
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = 'Process';
+                }
+            });
+
+            // --- Investigations + trend chart ---
+            async function loadInvestigations() {
+                const select = ids('investigation-select');
+                if (!select) return;
+                try {
+                    const response = await fetch(cfg.investigationsUrl, { method: 'GET' });
+
+                    if (response.status === 401) {
+                        window.location.href = '/login';
+                        return;
                     }
-                    if (summary) {
-                        summary.textContent = data.summary || 'No assessment returned.';
-                    }
-                    if (tips && Array.isArray(data.tips)) {
-                        data.tips.forEach(function(line) {
-                            var li = document.createElement('li');
-                            li.textContent = line;
-                            tips.appendChild(li);
+
+                    const data = await response.json();
+                    if (response.ok && data.investigations) {
+                        data.investigations.forEach(inv => {
+                            const option = document.createElement('option');
+                            option.value = inv;
+                            option.textContent = inv;
+                            select.appendChild(option);
                         });
                     }
-                    if (card) {
-                        card.classList.remove('d-none');
-                    }
-                })
-                .catch(function(err) {
-                    if (summary) {
-                        summary.textContent = 'Could not generate analysis: ' + err.message;
-                    }
-                    if (card) {
-                        card.classList.remove('d-none');
-                    }
-                })
-                .finally(function() {
-                    analyzeBtn.disabled = false;
-                    analyzeBtn.textContent = '🔍 Get Deeper Analysis';
-                });
-            });
-        })();
-
-        // Chat assistant with session memory
-        (function() {
-            var chatForm = document.getElementById('chat-form');
-            var chatInput = document.getElementById('chat-input');
-            var chatWindow = document.getElementById('chat-window');
-            var newChatBtn = document.getElementById('new-chat-btn');
-            var chatMatch = document.getElementById('chat-match');
-            var currentSessionId = null;
-
-            if (!chatForm || !chatInput || !chatWindow) {
-                return;
-            }
-
-            function appendMessage(role, text) {
-                var bubble = document.createElement('div');
-                bubble.className = 'chat-bubble ' + (role === 'user' ? 'chat-user' : 'chat-assistant');
-                bubble.textContent = text;
-                chatWindow.appendChild(bubble);
-                chatWindow.scrollTop = chatWindow.scrollHeight;
-            }
-
-            function clearChatUi() {
-                chatWindow.innerHTML = '';
-                if (chatMatch) {
-                    chatMatch.textContent = '';
-                }
-                var chartDiv = document.getElementById('chat-chart');
-                if (chartDiv) {
-                    chartDiv.innerHTML = '';
+                } catch (error) {
+                    console.error('Error loading investigations:', error);
                 }
             }
 
-            function loadLatestSession() {
-                fetch('/api/chat/sessions', { method: 'GET' })
-                .then(function(res) {
-                    if (res.status === 401) {
-                        window.location.href = '/login';
-                        throw new Error('Unauthorized');
-                    }
-                    return res.json();
-                })
-                .then(function(data) {
-                    if (!data.sessions || !data.sessions.length) {
-                        appendMessage('assistant', 'I am ready. Ask your first question about your lab reports.');
-                        return;
-                    }
-                    currentSessionId = data.sessions[0].id;
-                    return fetch('/api/chat/messages/' + encodeURIComponent(currentSessionId), { method: 'GET' });
-                })
-                .then(function(res) {
-                    if (!res) {
-                        return null;
-                    }
-                    return res.json();
-                })
-                .then(function(data) {
-                    if (!data || !Array.isArray(data.messages)) {
-                        return;
-                    }
-                    clearChatUi();
-                    data.messages.forEach(function(msg) {
-                        appendMessage(msg.role, msg.content || '');
-                    });
-                })
-                .catch(function() {
-                    if (!chatWindow.innerHTML) {
-                        appendMessage('assistant', 'I am ready. Ask your first question about your lab reports.');
-                    }
-                });
-            }
+            ids('investigation-select')?.addEventListener('change', async function(e) {
+                const investigationName = this.value;
+                const analyzeBtnContainer = ids('analyze-btn-container');
 
-            newChatBtn?.addEventListener('click', function() {
-                currentSessionId = null;
-                clearChatUi();
-                appendMessage('assistant', 'Started a new chat. What would you like to analyze?');
-            });
-
-            chatForm.addEventListener('submit', function(e) {
-                e.preventDefault();
-                var message = chatInput.value.trim();
-                if (!message) {
+                if (!investigationName) {
+                    if (analyzeBtnContainer) analyzeBtnContainer.style.display = 'none';
                     return;
                 }
 
-                appendMessage('user', message);
-                chatInput.value = '';
+                try {
+                    const response = await fetch(cfg.investigationUrl(investigationName), { method: 'GET' });
 
-                var submitBtn = chatForm.querySelector('button[type="submit"]');
-                if (submitBtn) {
-                    submitBtn.disabled = true;
-                    submitBtn.textContent = 'Thinking...';
-                }
-
-                fetch('/api/chat/query', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        message: message,
-                        session_id: currentSessionId
-                    })
-                })
-                .then(function(res) {
-                    if (res.status === 401) {
+                    if (response.status === 401) {
                         window.location.href = '/login';
-                        throw new Error('Unauthorized');
-                    }
-                    return res.json().then(function(data) {
-                        return { ok: res.ok, data: data };
-                    });
-                })
-                .then(function(result) {
-                    if (!result.ok) {
-                        throw new Error(result.data.error || 'Chat request failed');
+                        return;
                     }
 
-                    currentSessionId = result.data.session_id || currentSessionId;
-                    appendMessage('assistant', result.data.reply || 'No response returned.');
-
-                    if (chatMatch) {
-                        if (result.data.matched_investigation) {
-                            chatMatch.textContent = 'Matched investigation for chart: ' + result.data.matched_investigation + ' (' + result.data.match_method + ')';
-                        } else {
-                            chatMatch.textContent = '';
-                        }
+                    const data = await response.json();
+                    if (response.ok && data.graph) {
+                        Plotly.newPlot(cfg.prefix + '-chart', data.graph.data, data.graph.layout || {});
+                        if (analyzeBtnContainer) analyzeBtnContainer.style.display = 'block';
+                        ids('analysis-card')?.classList.add('d-none');
                     }
-
-                    if (result.data.graph) {
-                        Plotly.newPlot('chat-chart', result.data.graph.data, result.data.graph.layout || {});
-                    }
-                })
-                .catch(function(err) {
-                    appendMessage('assistant', 'Error: ' + err.message);
-                })
-                .finally(function() {
-                    if (submitBtn) {
-                        submitBtn.disabled = false;
-                        submitBtn.textContent = 'Send';
-                    }
-                });
+                } catch (error) {
+                    console.error('Error loading investigation data:', error);
+                }
             });
 
-            loadLatestSession();
-        })();
+            // --- Deeper analysis ---
+            (function() {
+                const analyzeBtn = ids('analyze-btn');
+                const card = ids('analysis-card');
+                const summary = ids('analysis-summary');
+                const tips = ids('analysis-tips');
+                const select = ids('investigation-select');
+
+                if (!analyzeBtn) return;
+
+                analyzeBtn.addEventListener('click', function() {
+                    const selectedInvestigation = select?.value;
+                    if (!selectedInvestigation) {
+                        alert('Please select an investigation first.');
+                        return;
+                    }
+
+                    analyzeBtn.disabled = true;
+                    analyzeBtn.textContent = 'Analyzing...';
+                    if (summary) summary.textContent = '';
+                    if (tips) tips.innerHTML = '';
+
+                    fetch(cfg.assessmentUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ investigation: selectedInvestigation })
+                    })
+                    .then(function(res) {
+                        if (res.status === 401) {
+                            alert('Session expired. Please login again.');
+                            window.location.href = '/login';
+                            throw new Error('Unauthorized');
+                        }
+                        return res.json();
+                    })
+                    .then(function(data) {
+                        if (data.error) throw new Error(data.error);
+                        if (summary) summary.textContent = data.summary || 'No assessment returned.';
+                        if (tips && Array.isArray(data.tips)) {
+                            data.tips.forEach(function(line) {
+                                const li = document.createElement('li');
+                                li.textContent = line;
+                                tips.appendChild(li);
+                            });
+                        }
+                        if (card) card.classList.remove('d-none');
+                    })
+                    .catch(function(err) {
+                        if (summary) summary.textContent = 'Could not generate analysis: ' + err.message;
+                        if (card) card.classList.remove('d-none');
+                    })
+                    .finally(function() {
+                        analyzeBtn.disabled = false;
+                        analyzeBtn.textContent = '🔍 Get Deeper Analysis';
+                    });
+                });
+            })();
+
+            // --- Chat assistant with session memory ---
+            (function() {
+                const chatForm = ids('chat-form');
+                const chatInput = ids('chat-input');
+                const chatWindow = ids('chat-window');
+                const newChatBtn = ids('new-chat-btn');
+                const chatMatch = ids('chat-match');
+                let currentSessionId = null;
+
+                if (!chatForm || !chatInput || !chatWindow) return;
+
+                function appendMessage(role, text) {
+                    const bubble = document.createElement('div');
+                    bubble.className = 'chat-bubble ' + (role === 'user' ? 'chat-user' : 'chat-assistant');
+                    bubble.textContent = text;
+                    chatWindow.appendChild(bubble);
+                    chatWindow.scrollTop = chatWindow.scrollHeight;
+                }
+
+                function clearChatUi() {
+                    chatWindow.innerHTML = '';
+                    if (chatMatch) chatMatch.textContent = '';
+                    const chartDiv = ids('chat-chart');
+                    if (chartDiv) chartDiv.innerHTML = '';
+                }
+
+                function loadLatestSession() {
+                    fetch(cfg.chatSessionsUrl, { method: 'GET' })
+                    .then(function(res) {
+                        if (res.status === 401) {
+                            window.location.href = '/login';
+                            throw new Error('Unauthorized');
+                        }
+                        return res.json();
+                    })
+                    .then(function(data) {
+                        if (!data.sessions || !data.sessions.length) {
+                            appendMessage('assistant', cfg.readyMessage);
+                            return;
+                        }
+                        currentSessionId = data.sessions[0].id;
+                        return fetch(cfg.chatMessagesUrl(currentSessionId), { method: 'GET' });
+                    })
+                    .then(function(res) {
+                        if (!res) return null;
+                        return res.json();
+                    })
+                    .then(function(data) {
+                        if (!data || !Array.isArray(data.messages)) return;
+                        clearChatUi();
+                        data.messages.forEach(function(msg) {
+                            appendMessage(msg.role, msg.content || '');
+                        });
+                    })
+                    .catch(function() {
+                        if (!chatWindow.innerHTML) appendMessage('assistant', cfg.readyMessage);
+                    });
+                }
+
+                newChatBtn?.addEventListener('click', function() {
+                    currentSessionId = null;
+                    clearChatUi();
+                    appendMessage('assistant', 'Started a new chat. What would you like to analyze?');
+                });
+
+                chatForm.addEventListener('submit', function(e) {
+                    e.preventDefault();
+                    const message = chatInput.value.trim();
+                    if (!message) return;
+
+                    appendMessage('user', message);
+                    chatInput.value = '';
+
+                    const submitBtn = chatForm.querySelector('button[type="submit"]');
+                    if (submitBtn) {
+                        submitBtn.disabled = true;
+                        submitBtn.textContent = 'Thinking...';
+                    }
+
+                    fetch(cfg.chatQueryUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ message: message, session_id: currentSessionId })
+                    })
+                    .then(function(res) {
+                        if (res.status === 401) {
+                            window.location.href = '/login';
+                            throw new Error('Unauthorized');
+                        }
+                        return res.json().then(function(data) {
+                            return { ok: res.ok, data: data };
+                        });
+                    })
+                    .then(function(result) {
+                        if (!result.ok) throw new Error(result.data.error || 'Chat request failed');
+
+                        currentSessionId = result.data.session_id || currentSessionId;
+                        appendMessage('assistant', result.data.reply || 'No response returned.');
+
+                        if (chatMatch) {
+                            if (result.data.matched_investigation) {
+                                chatMatch.textContent = 'Matched investigation for chart: ' + result.data.matched_investigation + ' (' + result.data.match_method + ')';
+                            } else {
+                                chatMatch.textContent = '';
+                            }
+                        }
+
+                        if (result.data.graph) {
+                            Plotly.newPlot(cfg.prefix + '-chat-chart', result.data.graph.data, result.data.graph.layout || {});
+                        }
+                    })
+                    .catch(function(err) {
+                        appendMessage('assistant', 'Error: ' + err.message);
+                    })
+                    .finally(function() {
+                        if (submitBtn) {
+                            submitBtn.disabled = false;
+                            submitBtn.textContent = 'Send';
+                        }
+                    });
+                });
+
+                loadLatestSession();
+            })();
+
+            loadInvestigations();
+        }
+
+        initReportDashboard({
+            prefix: 'blood',
+            uploadUrl: '/upload',
+            investigationsUrl: '/api/investigations',
+            investigationUrl: (name) => `/api/investigation/${encodeURIComponent(name)}`,
+            assessmentUrl: '/assessment',
+            chatSessionsUrl: '/api/chat/sessions',
+            chatMessagesUrl: (id) => `/api/chat/messages/${encodeURIComponent(id)}`,
+            chatQueryUrl: '/api/chat/query',
+            readyMessage: 'I am ready. Ask your first question about your lab reports.',
+        });
+
+        initReportDashboard({
+            prefix: 'cardiac',
+            uploadUrl: '/upload/cardiac',
+            investigationsUrl: '/api/cardiac/investigations',
+            investigationUrl: (name) => `/api/cardiac/investigation/${encodeURIComponent(name)}`,
+            assessmentUrl: '/api/cardiac/assessment',
+            chatSessionsUrl: '/api/cardiac/chat/sessions',
+            chatMessagesUrl: (id) => `/api/cardiac/chat/messages/${encodeURIComponent(id)}`,
+            chatQueryUrl: '/api/cardiac/chat/query',
+            readyMessage: 'I am ready. Ask your first question about your ECG/ECHO reports.',
+        });
     </script>
 </body>
 </html>
